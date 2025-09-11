@@ -1,0 +1,114 @@
+basePath: /api/v1
+definitions:
+  response.Response:
+    properties:
+      count:
+        type: integer
+      detail:
+        type: string
+      next:
+        type: string
+      previous:
+        type: string
+      results: {}
+    type: object
+info:
+  contact:
+    email: hecheng@nscc-tj.cn
+  description: Slurm + OpenLDAP Identity Daemon
+  title: SOLID
+  version: 0.0.1-alpha
+paths:
+  /api/v1/ldap/users:
+    get:
+      description: 在 LDAP 中搜索用户对象，返回其全部属性，结果按名称排序并分页
+      parameters:
+      - description: 页码，从 1 开始
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量，1-1000
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: 列出 LDAP 用户（全部属性）
+      tags:
+      - ldap
+      - users
+  /api/v1/slurm/accounting/users:
+    get:
+      description: 获取 Slurm 账户系统中用户列表，按 deleted=1 过滤，并支持分页参数 page、page_size
+      parameters:
+      - description: 页码，从 1 开始
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量，1-1000
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: 获取 Slurm 账户系统中用户列表（分页）
+      tags:
+      - slurm-accounting
+      - user
+  /api/v1/users:
+    get:
+      description: 从 SlurmDB 获取用户列表，并查询 LDAP 属性后返回（分页）
+      parameters:
+      - description: 页码，从 1 开始
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量，1-1000
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: 列出 (Slurm And LDAP)用户（含 LDAP 属性）
+      tags:
+      - users
+swagger: "2.0"
