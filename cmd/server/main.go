@@ -11,6 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	ldapc "solid/client/ldap"
+	slurmdbc "solid/client/slurmdb"
+	"solid/config"
 	"solid/internal/app/router"
 	ldapmod "solid/internal/module/ldap"
 	slurmdbmod "solid/internal/module/slurmdb"
@@ -37,7 +40,7 @@ func main() {
 		logFormat       = kingpin.Flag("log-format", "Log format").Default("text").Envar("SOLID_LOG_FORMAT").Enum("text", "json")
 		logOutput       = kingpin.Flag("log-output", "Log output destination").Default("stdout").Envar("SOLID_LOG_OUTPUT").Enum("stdout", "stderr", "file")
 		logFile         = kingpin.Flag("log-file", "Log file path (used when --log-output=file)").Envar("SOLID_LOG_FILE").String()
-		// configFile      = kingpin.Flag("config", "Path to YAML config file").Short('c').Default("config.yaml").Envar("SOLID_CONFIG").String()
+		configFile      = kingpin.Flag("config", "Path to YAML config file").Short('c').Default("config.yaml").Envar("SOLID_CONFIG").String()
 	)
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
@@ -57,27 +60,27 @@ func main() {
 	defer cleanup()
 
 	// Load config
-	// cfg, err := config.Load(*configFile)
-	// if err != nil {
-	// 	logger.Error("failed to load config", slog.String("path", *configFile), slog.Any("err", err))
-	// 	os.Exit(1)
-	// }
+	cfg, err := config.Load(*configFile)
+	if err != nil {
+		logger.Error("failed to load config", slog.String("path", *configFile), slog.Any("err", err))
+		os.Exit(1)
+	}
 
-	// // Init slurmdb client and set as default
-	// scli, err := slurmdbc.New(cfg.Server.Slurmdb)
-	// if err != nil {
-	// 	logger.Error("failed to initialize slurmdb client", slog.Any("err", err))
-	// 	os.Exit(1)
-	// }
-	// slurmdbc.SetDefault(scli)
+	// Init slurmdb client and set as default
+	scli, err := slurmdbc.New(cfg.Server.Slurmdb)
+	if err != nil {
+		logger.Error("failed to initialize slurmdb client", slog.Any("err", err))
+		os.Exit(1)
+	}
+	slurmdbc.SetDefault(scli)
 
-	// // Init LDAP client and set as default
-	// lcli, err := ldapc.New(cfg.Server.LDAP)
-	// if err != nil {
-	// 	logger.Error("failed to initialize ldap client", slog.Any("err", err))
-	// 	os.Exit(1)
-	// }
-	// ldapc.SetDefault(lcli)
+	// Init LDAP client and set as default
+	lcli, err := ldapc.New(cfg.Server.LDAP)
+	if err != nil {
+		logger.Error("failed to initialize ldap client", slog.Any("err", err))
+		os.Exit(1)
+	}
+	ldapc.SetDefault(lcli)
 
 	// Build router
 	r := router.New()

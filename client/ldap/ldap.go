@@ -7,6 +7,7 @@ import (
     "fmt"
     "net"
     "os"
+    "strconv"
     "strings"
     "time"
 
@@ -211,6 +212,58 @@ func (c *Client) GetUserAttributesByUIDs(ctx context.Context, usernames []string
             Name:      name,
             LDAPAttrs: attrs,
         })
+    }
+    return out, nil
+}
+
+// GetGIDNumberByAccountNames searches LDAP for posix groups by common name (cn)
+// and returns a mapping from account name to its gidNumber.
+//
+// Typical schema: objectClass=posixGroup with attributes cn and gidNumber.
+// Accounts are assumed to be represented as groups whose cn equals the account name.
+func (c *Client) GetGIDNumberByAccountNames(ctx context.Context, accounts []string) (map[string]uint32, error) {
+    if c == nil || c.Conn == nil {
+        return nil, fmt.Errorf("ldap client not initialized")
+    }
+    if len(accounts) == 0 {
+        return map[string]uint32{}, nil
+    }
+    // Build OR filter over cn for provided account names.
+    parts := make([]string, 0, len(accounts))
+    for _, a := range accounts {
+        if a == "" {
+            continue
+        }
+        parts = append(parts, fmt.Sprintf("(cn=%s)", gldap.EscapeFilter(a)))
+    }
+    if len(parts) == 0 {
+        return map[string]uint32{}, nil
+    }
+    filter := fmt.Sprintf("(|%s)", strings.Join(parts, ""))
+
+    req := gldap.NewSearchRequest(
+        c.BaseDN,
+        gldap.ScopeWholeSubtree,
+        gldap.NeverDerefAliases,
+        0, 0, false,
+        filter,
+        []string{"cn", "gidNumber"},
+        nil,
+    )
+    resp, err := c.Conn.Search(req)
+    if err != nil {
+        return nil, err
+    }
+    out := make(map[string]uint32, len(resp.Entries))
+    for _, e := range resp.Entries {
+        name := e.GetAttributeValue("cn")
+        gidStr := e.GetAttributeValue("gidNumber")
+        if name == "" || gidStr == "" {
+            continue
+        }
+        if gid, err := strconv.ParseUint(gidStr, 10, 32); err == nil {
+            out[name] = uint32(gid)
+        }
     }
     return out, nil
 }

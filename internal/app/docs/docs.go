@@ -17,6 +17,52 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/v1/accounts": {
+            "get": {
+                "description": "从 SlurmDB 获取账户（deleted=0），并从 LDAP 查询 gidNumber 与用户 uidNumber 后返回（分页）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "accounts"
+                ],
+                "summary": "列出账户（含 gid 与成员 uid）（分页）",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "页码，从 1 开始",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量，1-1000",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/ldap/users": {
             "get": {
                 "description": "在 LDAP 中搜索用户对象，返回其全部属性，结果按名称排序并分页",
@@ -28,6 +74,53 @@ const docTemplate = `{
                     "users"
                 ],
                 "summary": "列出 LDAP 用户（全部属性）",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "页码，从 1 开始",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量，1-1000",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/slurm/accounting/acounts": {
+            "get": {
+                "description": "获取 deleted=0 的账户，支持分页参数 page、page_size",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "slurm-accounting",
+                    "account"
+                ],
+                "summary": "获取 Slurm 账户列表（分页）",
                 "parameters": [
                     {
                         "type": "integer",

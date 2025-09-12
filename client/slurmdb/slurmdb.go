@@ -217,3 +217,76 @@ func (c *Client) GetUsersPaged(ctx context.Context, deleted *int, adminLevel *in
     }
     return res, total, nil
 }
+
+// GetAccts queries acct_table with an optional deleted filter.
+// Pass nil for deleted to ignore the filter.
+func (c *Client) GetAccts(ctx context.Context, deleted *int) (model.Accounts, error) {
+    if c == nil || c.DB == nil {
+        return nil, fmt.Errorf("nil slurmdb client")
+    }
+    res := make(model.Accounts, 0)
+    tx := c.DB.WithContext(ctx).Model(&model.Account{})
+    if deleted != nil {
+        tx = tx.Where("deleted = ?", *deleted)
+    }
+    if err := tx.Find(&res).Error; err != nil {
+        return nil, err
+    }
+    return res, nil
+}
+
+// GetAcctsPaged queries acct_table with an optional deleted filter and pagination.
+// Returns the paged accounts and total count before paging.
+func (c *Client) GetAcctsPaged(ctx context.Context, deleted *int, offset, limit int) (model.Accounts, int64, error) {
+    if c == nil || c.DB == nil {
+        return nil, 0, fmt.Errorf("nil slurmdb client")
+    }
+    base := c.DB.WithContext(ctx).Model(&model.Account{})
+    if deleted != nil {
+        base = base.Where("deleted = ?", *deleted)
+    }
+    var total int64
+    if err := base.Count(&total).Error; err != nil {
+        return nil, 0, err
+    }
+    var res model.Accounts
+    q := base
+    if limit > 0 {
+        q = q.Limit(limit)
+    }
+    if offset > 0 {
+        q = q.Offset(offset)
+    }
+    if err := q.Find(&res).Error; err != nil {
+        return nil, 0, err
+    }
+    return res, total, nil
+}
+
+// GetUserNamesByAccount returns distinct user names that belong to the given
+// account in the cluster-specific assoc table (<ClusterName>_assoc_table).
+// Only non-deleted (deleted = 0) user nodes are returned; account nodes are
+// excluded by requiring `user` to be non-empty.
+func (c *Client) GetUserNamesByAccount(ctx context.Context, account string) ([]string, error) {
+    if c == nil || c.DB == nil {
+        return nil, fmt.Errorf("nil slurmdb client")
+    }
+    if strings.TrimSpace(account) == "" {
+        return nil, fmt.Errorf("account name is required")
+    }
+    if strings.TrimSpace(c.ClusterName) == "" {
+        return nil, fmt.Errorf("cluster name is empty in slurmdb client")
+    }
+    table := fmt.Sprintf("%s_assoc_table", c.ClusterName)
+
+    var users []string
+    tx := c.DB.WithContext(ctx).
+        Table(table).
+        Where("acct = ? AND `user` <> '' AND deleted = 0", account).
+        Distinct().
+        Pluck("`user`", &users)
+    if tx.Error != nil {
+        return nil, tx.Error
+    }
+    return users, nil
+}

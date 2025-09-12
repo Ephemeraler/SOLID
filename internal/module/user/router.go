@@ -9,6 +9,7 @@ func (Router) Register(r *gin.Engine) {
     {
         g := v1.Group("/users")
         g.GET("", HandlerListUsers) // GET /api/v1/users
+        v1.GET("/accounts", HandlerListAccts) // GET /api/v1/accounts
         // g.POST("", CreateUser) // POST /api/v1/users
         // g.GET("/:id", GetUser) // GET /api/v1/users/:id
     }
