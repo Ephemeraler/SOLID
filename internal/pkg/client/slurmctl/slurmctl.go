@@ -114,7 +114,31 @@ func (sc *Slurmctlc) GetJobs(ctx context.Context) (models.Jobs, error) {
 type Partition struct {
 }
 
-func (sc *Slurmctlc) GetPartitions(ctx context.Context, partition []string) {
+// GetPartitions 获取分区详情.
+func (sc *Slurmctlc) GetPartitions(ctx context.Context, partitions []string) ([]map[string]string, error) {
+    results := make([]map[string]string, 0)
+    if len(partitions) != 0 {
+        for _, partition := range partitions {
+            cmd := sc.execCommand(ctx, "scontrol", "show", "partition", partition)
+            out, err := cmd.CombinedOutput()
+            if err != nil {
+                sc.logger.Error("failed to exec sinfo command", "output", string(out), "cmd", cmd.String(), "err", err)
+                return nil, fmt.Errorf("failed to exec %s", cmd.String())
+            }
+            results = append(results, parsePartition(string(out))...)
+        }
+        return results, nil
+    }
+
+    // 获取所有分区
+    cmd := sc.execCommand(ctx, "scontrol", "show", "partition")
+    out, err := cmd.CombinedOutput()
+    if err != nil {
+        sc.logger.Error("failed to exec sinfo command", "output", string(out), "cmd", cmd.String(), "err", err)
+        return nil, fmt.Errorf("failed to exec %s", cmd.String())
+    }
+
+    return parsePartition(string(out)), nil
 }
 
 // func (sc *Slurmctlc) GetPartitions(ctx context.Context) ([]string, error) {

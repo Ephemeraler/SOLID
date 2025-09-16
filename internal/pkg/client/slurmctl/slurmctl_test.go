@@ -1,6 +1,10 @@
 package slurmctl
 
 import (
+	"context"
+	"fmt"
+	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -63,5 +67,69 @@ func TestParseParttion_MultiplePartitions(t *testing.T) {
 	}
 	if p2["MaxTime"] != "UNLIMITED" {
 		t.Errorf("p2 MaxTime expected UNLIMITED, got %q", p2["MaxTime"])
+	}
+}
+
+// helper: build fake exec that returns output based on args
+func fakeExec(outputFn func(name string, args ...string) string) ExecCommandFunc {
+	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		// Use sh -c to emit prebuilt content
+		script := fmt.Sprintf("cat <<'EOF'\n%s\nEOF\n", outputFn(name, args...))
+		return exec.CommandContext(ctx, "sh", "-c", script)
+	}
+}
+
+func TestGetPartitions_AllAndFiltered(t *testing.T) {
+	// derive single-partition blocks from samplePartitions
+	blocks := strings.Split(samplePartitions, "\n\nPartitionName=")
+	if len(blocks) != 2 {
+		t.Fatalf("unexpected sample split: %d", len(blocks))
+	}
+	p1Block := blocks[0]
+	p2Block := "PartitionName=" + blocks[1]
+
+	// 1) All partitions: expect both p1 and p2 returned
+	scAll := &Slurmctlc{}
+	scAll = scAll.WithExecCommand(fakeExec(func(name string, args ...string) string {
+		// scontrol show partition
+		if len(args) == 2 && args[0] == "show" && args[1] == "partition" {
+			return samplePartitions
+		}
+		return ""
+	}))
+	partsAll, err := scAll.GetPartitions(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("GetPartitions(all) error: %v", err)
+	}
+	if len(partsAll) != 2 {
+		t.Fatalf("expected 2 partitions for all, got %d", len(partsAll))
+	}
+	if partsAll[0]["PartitionName"] != "p1" || partsAll[1]["PartitionName"] != "p2" {
+		t.Errorf("unexpected partition order or names: %+v", partsAll)
+	}
+
+	// 2) Filtered partitions: only p1
+	scOne := &Slurmctlc{}
+	scOne = scOne.WithExecCommand(fakeExec(func(name string, args ...string) string {
+		// scontrol show partition <name>
+		if len(args) == 3 && args[0] == "show" && args[1] == "partition" {
+			if args[2] == "p1" {
+				return p1Block
+			}
+			if args[2] == "p2" {
+				return p2Block
+			}
+		}
+		return ""
+	}))
+	partsOne, err := scOne.GetPartitions(context.Background(), []string{"p1"})
+	if err != nil {
+		t.Fatalf("GetPartitions(p1) error: %v", err)
+	}
+	if len(partsOne) != 1 {
+		t.Fatalf("expected 1 partition for filtered, got %d", len(partsOne))
+	}
+	if partsOne[0]["PartitionName"] != "p1" {
+		t.Errorf("expected PartitionName p1, got %q", partsOne[0]["PartitionName"])
 	}
 }
