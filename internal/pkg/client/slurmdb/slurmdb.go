@@ -56,24 +56,24 @@ func New(cfg config.Slurmdb, logger *slog.Logger) (*Client, error) {
 		return nil, err
 	}
 
-    // Tune the underlying connection pool
-    if sqlDB, err := db.DB(); err == nil {
-        if cfg.MaxOpenConns > 0 {
-            sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
-        }
-        if cfg.MaxIdleConns > 0 {
-            sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
-        }
-        if d := parseDuration(cfg.ConnMaxLifetime); d > 0 {
-            sqlDB.SetConnMaxLifetime(d)
-        }
-        // Proactive connectivity check with timeout to avoid hanging on unreachable DB
-        ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-        defer cancel()
-        if err := sqlDB.PingContext(ctx); err != nil {
-            return nil, err
-        }
-    }
+	// Tune the underlying connection pool
+	if sqlDB, err := db.DB(); err == nil {
+		if cfg.MaxOpenConns > 0 {
+			sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+		}
+		if cfg.MaxIdleConns > 0 {
+			sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+		}
+		if d := parseDuration(cfg.ConnMaxLifetime); d > 0 {
+			sqlDB.SetConnMaxLifetime(d)
+		}
+		// Proactive connectivity check with timeout to avoid hanging on unreachable DB
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := sqlDB.PingContext(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	// Enforce read-only at ORM layer
 	enforceReadOnly(db)
@@ -96,8 +96,8 @@ func buildDSN(cfg config.Slurmdb) (string, error) {
 	addr := fmt.Sprintf("tcp(%s:%d)", cfg.Host, cfg.Port)
 	dbname := cfg.Database
 
-    // Params
-    params := make([]string, 0, 8)
+	// Params
+	params := make([]string, 0, 8)
 	if cfg.Charset != "" {
 		params = append(params, fmt.Sprintf("charset=%s", cfg.Charset))
 	}
@@ -109,14 +109,14 @@ func buildDSN(cfg config.Slurmdb) (string, error) {
 	if cfg.Loc != "" {
 		params = append(params, fmt.Sprintf("loc=%s", url.QueryEscape(cfg.Loc)))
 	}
-    if cfg.TLS != "" {
-        params = append(params, fmt.Sprintf("tls=%s", cfg.TLS))
-    }
-    // Set conservative timeouts to prevent hangs on connect/read/write
-    // See https://github.com/go-sql-driver/mysql#dsn-data-source-name
-    params = append(params, "timeout=5s")
-    params = append(params, "readTimeout=5s")
-    params = append(params, "writeTimeout=5s")
+	if cfg.TLS != "" {
+		params = append(params, fmt.Sprintf("tls=%s", cfg.TLS))
+	}
+	// Set conservative timeouts to prevent hangs on connect/read/write
+	// See https://github.com/go-sql-driver/mysql#dsn-data-source-name
+	params = append(params, "timeout=5s")
+	params = append(params, "readTimeout=5s")
+	params = append(params, "writeTimeout=5s")
 
 	dsn := fmt.Sprintf("%s@%s/%s", creds, addr, dbname)
 	if len(params) > 0 {
