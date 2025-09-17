@@ -14,7 +14,6 @@ import (
 	glogger "gorm.io/gorm/logger"
 
 	"solid/config"
-	"solid/internal/pkg/client/slurmctl/models"
 	"solid/internal/pkg/model"
 )
 
@@ -232,45 +231,29 @@ func (c *Client) GetUsersPaged(ctx context.Context, deleted *int, adminLevel *in
 	return res, total, nil
 }
 
-// GetAccts queries acct_table with an optional deleted filter.
-// Pass nil for deleted to ignore the filter.
-func (c *Client) GetAccts(ctx context.Context, deleted *int) (model.Accounts, error) {
-	if c == nil || c.DB == nil {
-		return nil, fmt.Errorf("nil slurmdb Client")
-	}
-	res := make(model.Accounts, 0)
-	tx := c.DB.WithContext(ctx).Model(&model.Account{})
-	if deleted != nil {
-		tx = tx.Where("deleted = ?", *deleted)
-	}
-	if err := tx.Find(&res).Error; err != nil {
-		return nil, err
-	}
-	return res, nil
-}
-
 // GetAcctsPaged queries acct_table with an optional deleted filter and pagination.
 // Returns the paged accounts and total count before paging.
-func (c *Client) GetAcctsPaged(ctx context.Context, deleted *int, offset, limit int) (model.Accounts, int64, error) {
+func (c *Client) GetAccounts(ctx context.Context, paging bool, offset, limit int) (model.Accounts, int64, error) {
 	if c == nil || c.DB == nil {
 		return nil, 0, fmt.Errorf("nil slurmdb Client")
 	}
-	base := c.DB.WithContext(ctx).Model(&model.Account{})
-	if deleted != nil {
-		base = base.Where("deleted = ?", *deleted)
-	}
+
+	base := c.DB.WithContext(ctx).Model(&model.Account{}).Where("deleted = 0")
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var res model.Accounts
 	q := base
-	if limit > 0 {
-		q = q.Limit(limit)
+	if paging == true {
+		if limit > 0 {
+			q = q.Limit(limit)
+		}
+		if offset > 0 {
+			q = q.Offset(offset)
+		}
 	}
-	if offset > 0 {
-		q = q.Offset(offset)
-	}
+
 	if err := q.Find(&res).Error; err != nil {
 		return nil, 0, err
 	}
@@ -278,7 +261,7 @@ func (c *Client) GetAcctsPaged(ctx context.Context, deleted *int, offset, limit 
 }
 
 // GetAcctByName returns a single account by name from acct_table with an optional deleted filter.
-func (c *Client) GetAcctByName(ctx context.Context, name string, deleted *int) (*model.Account, error) {
+func (c *Client) GetAcctByName(ctx context.Context, name string) (*model.Account, error) {
 	if c == nil || c.DB == nil {
 		return nil, fmt.Errorf("nil slurmdb Client")
 	}
@@ -286,17 +269,161 @@ func (c *Client) GetAcctByName(ctx context.Context, name string, deleted *int) (
 		return nil, fmt.Errorf("account name is required")
 	}
 	var acct model.Account
-	tx := c.DB.WithContext(ctx).Model(&model.Account{})
-	if deleted != nil {
-		tx = tx.Where("deleted = ?", *deleted)
-	}
+	tx := c.DB.WithContext(ctx).Model(&model.Account{}).Where("deleted = 0")
 	if err := tx.Where("name = ?", name).First(&acct).Error; err != nil {
 		return nil, err
 	}
 	return &acct, nil
 }
 
-// GetSubAccountsAndUsers returns direct child accounts (by parent_acct) and users
+type AccountTree struct {
+	Name        string // 当前节点账户名
+	Org         string // 当前节点账户组织信息 acct_table.organization
+	Desc        string // 当前节点描述信息 acct_table.description
+	SubAccounts []AccountTree
+	SubUsers    []User
+}
+
+type User struct {
+	Name           string   // 用户名称
+	AdminLevel     int      // 用户管理级别 user_table.admin_level
+	ParentAccounts []string // 用户所属全部父账号 <clustername>_assoc_table
+}
+
+// GetAccountsTree 获取当前账户 account 的直接子节点信息.
+func (c *Client) GetAccountsTree(ctx context.Context, account string) (AccountTree, error) {
+	tree := AccountTree{
+		Name: account,
+	}
+	if c == nil || c.DB == nil {
+		return tree, fmt.Errorf("nil slurmdb Client")
+	}
+	if strings.TrimSpace(account) == "" {
+		return tree, fmt.Errorf("account name is required")
+	}
+
+	acct, err := c.GetAcctByName(ctx, account)
+	if err != nil {
+		return tree, fmt.Errorf("unable to find '%s': %w", account, err)
+	}
+	tree.Desc = acct.Description
+	tree.Org = acct.Organization
+
+	subAcctsName, subUsersName, err := c.GetSubAccountsAndUsers(ctx, account)
+	if err != nil {
+		return tree, fmt.Errorf("unable to find %s's subaccounts or subusers: %w", account, err)
+	}
+
+	for _, name := range subUsersName {
+		ps, err := c.GetParentAccountsByUser(ctx, name)
+		if err != nil {
+			return tree, fmt.Errorf("unable to find user(%s)'s all parents: %w", name, err)
+		}
+		al, err := c.GetUserAdminLevels(ctx, []string{name})
+		if err != nil {
+			return tree, fmt.Errorf("unable to find user(%s)'s admin level: %w", name, err)
+		}
+		tree.SubUsers = append(tree.SubUsers, User{Name: name, AdminLevel: al[name], ParentAccounts: ps})
+	}
+
+	for _, account := range subAcctsName {
+		tree.SubAccounts = append(tree.SubAccounts, AccountTree{Name: account})
+	}
+
+	return tree, nil
+}
+
+// GetPartitionOfAccount 从 assoc_table 中查找某个账户的分区信息.
+func (c *Client) GetPartitionOfAccount(ctx context.Context, account string) (string, error) {
+	table := fmt.Sprintf("%s_assoc_table", c.ClusterName)
+	var partition string
+	if err := c.DB.WithContext(ctx).
+		Table(table).
+		Where("acct = ? AND deleted = 0 AND `user` = ''", account).
+		Distinct("`partition`").
+		Pluck("`partition`", &partition).Error; err != nil {
+		return partition, err
+	}
+	return partition, nil
+}
+
+// GetPartitionsOfUser 在 <cluster_name>_assoc_table 中寻找所有满足 acct = account and user = user 条目的 partition 字段, 并返回.
+func (c *Client) GetPartitionsOfUser(ctx context.Context, account, user string) ([]string, error) {
+	if c == nil || c.DB == nil {
+		return nil, fmt.Errorf("nil slurmdb Client")
+	}
+	if strings.TrimSpace(account) == "" {
+		return nil, fmt.Errorf("account name is required")
+	}
+	if strings.TrimSpace(user) == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+	if strings.TrimSpace(c.ClusterName) == "" {
+		return nil, fmt.Errorf("cluster name is empty in slurmdb Client")
+	}
+
+	table := fmt.Sprintf("%s_assoc_table", c.ClusterName)
+	var parts []string
+	if err := c.DB.WithContext(ctx).
+		Table(table).
+		Where("acct = ? AND `user` = ? AND deleted = 0", account, user).
+		Where("`partition` <> ''").
+		Distinct().
+		Pluck("`partition`", &parts).Error; err != nil {
+		return nil, err
+	}
+	return parts, nil
+}
+
+type AssociationTree struct {
+	Name        string // 当前节点账户名称
+	Partition   string // 当前节点分区名称
+	SubAccounts []string
+	SubUsers    []AssociationUser
+}
+
+type AssociationUser struct {
+	Name      string
+	Partition []string
+}
+
+func (c *Client) GetAssociationTree(ctx context.Context, account string) (AssociationTree, error) {
+	tree := AssociationTree{
+		Name: account,
+	}
+	if c == nil || c.DB == nil {
+		return tree, fmt.Errorf("nil slurmdb Client")
+	}
+	if strings.TrimSpace(account) == "" {
+		return tree, fmt.Errorf("account name is required")
+	}
+	partition, err := c.GetPartitionOfAccount(ctx, account)
+	if err != nil {
+		return tree, fmt.Errorf("unable to find account(%s)'s partition: %w", account, err)
+	}
+	tree.Partition = partition
+
+	subAcctsName, subUsersName, err := c.GetSubAccountsAndUsers(ctx, account)
+	if err != nil {
+		return tree, fmt.Errorf("unable to find %s's subaccounts or subusers: %w", account, err)
+	}
+
+	for _, name := range subUsersName {
+		parts, err := c.GetPartitionsOfUser(ctx, account, name)
+		if err != nil {
+			return tree, fmt.Errorf("unable to find <%s, %s>'s partitions: %w", account, name, err)
+		}
+		tree.SubUsers = append(tree.SubUsers, AssociationUser{Name: name, Partition: parts})
+	}
+
+	for _, account := range subAcctsName {
+		tree.SubAccounts = append(tree.SubAccounts, account)
+	}
+
+	return tree, nil
+}
+
+// GetSubAccountsAndUsers 返回子账号及子用户returns direct child accounts (by parent_acct) and users
 // associated to the given account in <ClusterName>_assoc_table (deleted=0 only).
 func (c *Client) GetSubAccountsAndUsers(ctx context.Context, account string) ([]string, []string, error) {
 	if c == nil || c.DB == nil {
@@ -324,7 +451,7 @@ func (c *Client) GetSubAccountsAndUsers(ctx context.Context, account string) ([]
 	var subUsers []string
 	if err := c.DB.WithContext(ctx).
 		Table(table).
-		Where("acct = ? AND deleted = 0 AND `user` <> ''", account).
+		Where("parent_acct = ? AND deleted = 0 AND `user` <> ''", account).
 		Distinct().
 		Pluck("`user`", &subUsers).Error; err != nil {
 		return nil, nil, err
@@ -381,6 +508,25 @@ func (c *Client) GetUserAssociations(ctx context.Context, username string) ([]mo
 
 // ErrMultipleAssociations indicates that more than one association matched the filter.
 var ErrMultipleAssociations = errors.New("multiple associations matched")
+
+func (c *Client) GetAssociation(ctx context.Context, account, user, partition string) (*model.UserAssociation, error) {
+	if c == nil || c.DB == nil {
+		return nil, fmt.Errorf("nil slurmdb Client")
+	}
+	if strings.TrimSpace(c.ClusterName) == "" {
+		return nil, fmt.Errorf("cluster name is empty in slurmdb Client")
+	}
+	table := model.AssocTableName(c.ClusterName)
+	var row model.UserAssociation
+	err := c.DB.WithContext(ctx).
+		Table(table).
+		Where("deleted = 0 AND acct = ? AND `user` = ? AND `partition` = ?", account, user, partition).
+		First(&row).Error
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
 
 // FindAssociationOne finds a single association in <ClusterName>_assoc_table by filters.
 // Required: account. Optional: user, partition. Always filters deleted=0.
@@ -447,23 +593,173 @@ func (c *Client) GetUserNamesByAccount(ctx context.Context, account string) ([]s
 
 type JobsFilter struct{}
 
-// GetJobs 获取
-func (sc *Client) GetJobs(ctx context.Context, filter JobsFilter, page, pageSize int64) (models.Jobs, int64, error) {
-	return nil, 0, nil
-}
-
-// GetQos 获取 QoS, 若 id 为 -1 表示获取所有 QoS, 否则只获取指定 QoS 信息.
-func (sc *Client) GetQos(ctx context.Context, id int) (model.Qoses, error) {
-	if sc == nil || sc.DB == nil {
+// GetUserAdminLevels returns a map of username -> admin_level for the given usernames
+// from user_table, filtering deleted = 0. Unknown users are omitted from the map.
+func (c *Client) GetUserAdminLevels(ctx context.Context, usernames []string) (map[string]int, error) {
+	if c == nil || c.DB == nil {
 		return nil, fmt.Errorf("nil slurmdb Client")
 	}
-	res := make(model.Qoses, 0)
-	tx := sc.DB.WithContext(ctx).Model(&model.Qos{}).Where("deleted = 0")
-	if id != -1 {
-		tx = tx.Where("id = ?", id)
+	if len(usernames) == 0 {
+		return map[string]int{}, nil
 	}
-	if err := tx.Find(&res).Error; err != nil {
+	// Deduplicate to keep query concise
+	uniq := make(map[string]struct{}, len(usernames))
+	list := make([]string, 0, len(usernames))
+	for _, u := range usernames {
+		if u == "" {
+			continue
+		}
+		if _, ok := uniq[u]; ok {
+			continue
+		}
+		uniq[u] = struct{}{}
+		list = append(list, u)
+	}
+	if len(list) == 0 {
+		return map[string]int{}, nil
+	}
+
+	var rows model.Users
+	if err := c.DB.WithContext(ctx).
+		Model(&model.User{}).
+		Where("deleted = 0 AND name IN ?", list).
+		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	return res, nil
+	out := make(map[string]int, len(rows))
+	for _, r := range rows {
+		out[r.Name] = int(r.AdminLevel)
+	}
+	return out, nil
+}
+
+func (c *Client) GetAccoutingJobs(ctx context.Context, paging bool, page, page_size int64) {}
+
+func (c *Client) GetJobSteps(ctx context.Context, jobid int64) (model.Steps, error) {
+	steps := make(model.Steps, 0)
+	if c == nil || c.DB == nil {
+		return steps, fmt.Errorf("nil slurmdb Client")
+	}
+	if strings.TrimSpace(c.ClusterName) == "" {
+		return steps, fmt.Errorf("cluster name is empty in slurmdb Client")
+	}
+	if jobid <= 0 {
+		return steps, fmt.Errorf("invalid jobid")
+	}
+
+	jobTable := fmt.Sprintf("%s_job_table", c.ClusterName)
+	stepTable := fmt.Sprintf("%s_step_table", c.ClusterName)
+
+	// Join job and step tables by job_db_inx, filter by jobid and deleted=0, order by start/id
+	q := c.DB.WithContext(ctx).
+		Table(stepTable+" AS s").
+		Joins("JOIN "+jobTable+" AS j ON s.job_db_inx = j.job_db_inx").
+		Where("j.id_job = ? AND s.deleted = 0", jobid)
+	if err := q.Find(&steps).Error; err != nil {
+		return nil, err
+	}
+	return steps, nil
+}
+
+// GetJobDetail 返回指定 jobid 的作业详情（来自 <cluster>_job_table），过滤 deleted=0。
+// 当 jobid 存在多行（如数组作业），返回最新记录（按 job_db_inx DESC）。
+func (c *Client) GetJobDetail(ctx context.Context, jobid int64) (*model.Job, error) {
+	if c == nil || c.DB == nil {
+		return nil, fmt.Errorf("nil slurmdb Client")
+	}
+	if strings.TrimSpace(c.ClusterName) == "" {
+		return nil, fmt.Errorf("cluster name is empty in slurmdb Client")
+	}
+	if jobid <= 0 {
+		return nil, fmt.Errorf("invalid jobid")
+	}
+	table := fmt.Sprintf("%s_job_table", c.ClusterName)
+	var row model.Job
+	tx := c.DB.WithContext(ctx).
+		Table(table).
+		Where("id_job = ? AND deleted = 0", jobid).
+		Order("job_db_inx DESC").
+		First(&row)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	return &row, nil
+}
+
+// GetJobsDetail 按 jobid 降序分页返回作业详情（deleted=0）。
+// page 从 1 开始；page_size > 0。内部按 id_job DESC 排序。
+func (c *Client) GetJobsDetail(ctx context.Context, page, pageSize int) (model.Jobs, int64, error) {
+	if c == nil || c.DB == nil {
+		return nil, 0, fmt.Errorf("nil slurmdb Client")
+	}
+	if strings.TrimSpace(c.ClusterName) == "" {
+		return nil, 0, fmt.Errorf("cluster name is empty in slurmdb Client")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
+	table := fmt.Sprintf("%s_job_table", c.ClusterName)
+	base := c.DB.WithContext(ctx).Table(table).Where("deleted = 0")
+
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var rows model.Jobs
+	q := base.Order("id_job DESC").Offset(offset).Limit(pageSize)
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+// GetQos 根据 ID 获取单个 QoS（deleted=0）。
+func (c *Client) GetQos(ctx context.Context, id int) (*model.Qos, error) {
+	if c == nil || c.DB == nil {
+		return nil, fmt.Errorf("nil slurmdb Client")
+	}
+
+	var row model.Qos
+	tx := c.DB.WithContext(ctx).Model(&model.Qos{}).Where("deleted = 0 AND id = ?", id).First(&row)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	return &row, nil
+}
+
+// GetQosAll 获取 QoS 列表，按 id 降序排列；当 paging=true 时应用分页。
+func (c *Client) GetQosAll(ctx context.Context, paging bool, page, pageSize int) (model.Qoses, int64, error) {
+	if c == nil || c.DB == nil {
+		return nil, 0, fmt.Errorf("nil slurmdb Client")
+	}
+	base := c.DB.WithContext(ctx).Model(&model.Qos{}).Where("deleted = 0")
+
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	q := base.Order("id DESC")
+	if paging {
+		if page < 1 {
+			page = 1
+		}
+		if pageSize <= 0 {
+			pageSize = 20
+		}
+		offset := (page - 1) * pageSize
+		q = q.Offset(offset).Limit(pageSize)
+	}
+
+	var rows model.Qoses
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }
