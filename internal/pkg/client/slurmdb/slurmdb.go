@@ -178,53 +178,48 @@ func enforceReadOnly(db *gorm.DB) {
 	})
 }
 
-// GetUsers queries user_table with optional filters on deleted and admin_level.
-// Pass nil for a filter to ignore it.
-func (c *Client) GetUsers(ctx context.Context, deleted *int, adminLevel *int) (model.Users, error) {
+// GetUser 根据用户名称获取用户信息.
+func (c *Client) GetUserByName(ctx context.Context, name string) (model.Users, error) {
 	if c == nil || c.DB == nil {
 		return nil, fmt.Errorf("nil slurmdb Client")
 	}
-	res := make(model.Users, 0)
-	tx := c.DB.WithContext(ctx).Model(&model.User{})
-	if deleted != nil {
-		tx = tx.Where("deleted = ?", *deleted)
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("username is required")
 	}
-	if adminLevel != nil {
-		tx = tx.Where("admin_level = ?", *adminLevel)
-	}
+	var res model.Users
+	tx := c.DB.WithContext(ctx).Model(&model.User{}).
+		Where("deleted = 0 AND name = ?", name)
 	if err := tx.Find(&res).Error; err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-// GetUsersPaged queries user_table with filters and pagination.
-// Returns the paged users and the total count before paging.
-func (c *Client) GetUsersPaged(ctx context.Context, deleted *int, adminLevel *int, offset, limit int) (model.Users, int64, error) {
+// GetUsers 获取全部用户信息, 支持分页.
+func (c *Client) GetUsersPaged(ctx context.Context, paging bool, page, pageSize int) (model.Users, int64, error) {
 	if c == nil || c.DB == nil {
 		return nil, 0, fmt.Errorf("nil slurmdb Client")
 	}
-	base := c.DB.WithContext(ctx).Model(&model.User{})
-	if deleted != nil {
-		base = base.Where("deleted = ?", *deleted)
-	}
-	if adminLevel != nil {
-		base = base.Where("admin_level = ?", *adminLevel)
-	}
+	base := c.DB.WithContext(ctx).Model(&model.User{}).Where("deleted = 0")
 
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	var res model.Users
 	q := base
-	if limit > 0 {
-		q = q.Limit(limit)
+	if paging {
+		if page < 1 {
+			page = 1
+		}
+		if pageSize <= 0 {
+			pageSize = 20
+		}
+		offset := (page - 1) * pageSize
+		q = q.Offset(offset).Limit(pageSize)
 	}
-	if offset > 0 {
-		q = q.Offset(offset)
-	}
+
+	var res model.Users
 	if err := q.Find(&res).Error; err != nil {
 		return nil, 0, err
 	}
@@ -276,23 +271,23 @@ func (c *Client) GetAcctByName(ctx context.Context, name string) (*model.Account
 	return &acct, nil
 }
 
-type AccountTree struct {
-	Name        string // 当前节点账户名
-	Org         string // 当前节点账户组织信息 acct_table.organization
-	Desc        string // 当前节点描述信息 acct_table.description
-	SubAccounts []AccountTree
-	SubUsers    []User
+type AccountNode struct {
+	Name         string     `json:"name"`         // 当前账号节点
+	Organization string     `json:"organization"` // 单位
+	Description  string     `json:"description"`  // 描述
+	SubAccounts  []string   `json:"sub_accounts"` // 子账号名称
+	SubUsers     []UserNode `json:"sub_users"`    // 子用户节点信息
 }
 
-type User struct {
-	Name           string   // 用户名称
-	AdminLevel     int      // 用户管理级别 user_table.admin_level
-	ParentAccounts []string // 用户所属全部父账号 <clustername>_assoc_table
+type UserNode struct {
+	Name              string   `json:"name"`               // 用户名
+	AdminLevel        int      `json:"admin_level"`        // 管理级别
+	AvailableAccounts []string `json:"available_accounts"` // 可用账号
 }
 
-// GetAccountsTree 获取当前账户 account 的直接子节点信息.
-func (c *Client) GetAccountsTree(ctx context.Context, account string) (AccountTree, error) {
-	tree := AccountTree{
+// GetAccountsTree 获取当前账户 account 的子节点信息.
+func (c *Client) GetChildNodesOfAccount(ctx context.Context, account string) (AccountNode, error) {
+	tree := AccountNode{
 		Name: account,
 	}
 	if c == nil || c.DB == nil {
@@ -306,8 +301,8 @@ func (c *Client) GetAccountsTree(ctx context.Context, account string) (AccountTr
 	if err != nil {
 		return tree, fmt.Errorf("unable to find '%s': %w", account, err)
 	}
-	tree.Desc = acct.Description
-	tree.Org = acct.Organization
+	tree.Description = acct.Description
+	tree.Organization = acct.Organization
 
 	subAcctsName, subUsersName, err := c.GetSubAccountsAndUsers(ctx, account)
 	if err != nil {
@@ -323,14 +318,61 @@ func (c *Client) GetAccountsTree(ctx context.Context, account string) (AccountTr
 		if err != nil {
 			return tree, fmt.Errorf("unable to find user(%s)'s admin level: %w", name, err)
 		}
-		tree.SubUsers = append(tree.SubUsers, User{Name: name, AdminLevel: al[name], ParentAccounts: ps})
+		tree.SubUsers = append(tree.SubUsers, UserNode{Name: name, AdminLevel: al[name], AvailableAccounts: ps})
 	}
 
 	for _, account := range subAcctsName {
-		tree.SubAccounts = append(tree.SubAccounts, AccountTree{Name: account})
+		tree.SubAccounts = append(tree.SubAccounts, account)
 	}
 
 	return tree, nil
+}
+
+type AssociationNode struct {
+	Name        string   `json:"name"`         // 账户名称
+	Partition   string   `json:"partition"`    // 默认分区
+	SubAccounts []string `json:"sub_accounts"` // 子账户
+	SubUsers    []AssociationUserNode
+}
+
+type AssociationUserNode struct {
+	Name       string   `json:"name"` // 用户名
+	Partitions []string // 关联分区名称
+}
+
+func (c *Client) GetAssociationChildNodesOfAccount(ctx context.Context, account string) (AssociationNode, error) {
+	node := AssociationNode{Name: account}
+	if c == nil || c.DB == nil {
+		return node, fmt.Errorf("nil slurmdb Client")
+	}
+	if strings.TrimSpace(account) == "" {
+		return node, fmt.Errorf("account name is required")
+	}
+
+	// Default partition of current account (from assoc account row where user='')
+	part, err := c.GetPartitionOfAccount(ctx, account)
+	if err != nil {
+		return node, fmt.Errorf("unable to find account(%s)'s partition: %w", account, err)
+	}
+	node.Partition = part
+
+	// Direct sub-accounts and sub-users
+	subAccts, subUsers, err := c.GetSubAccountsAndUsers(ctx, account)
+	if err != nil {
+		return node, fmt.Errorf("unable to find %s's subaccounts or subusers: %w", account, err)
+	}
+	node.SubAccounts = append(node.SubAccounts, subAccts...)
+
+	// For each sub-user, collect partitions within this account
+	node.SubUsers = make([]AssociationUserNode, 0, len(subUsers))
+	for _, u := range subUsers {
+		parts, err := c.GetPartitionsOfUser(ctx, account, u)
+		if err != nil {
+			return node, fmt.Errorf("unable to find partitions for user(%s) in account(%s): %w", u, account, err)
+		}
+		node.SubUsers = append(node.SubUsers, AssociationUserNode{Name: u, Partitions: parts})
+	}
+	return node, nil
 }
 
 // GetPartitionOfAccount 从 assoc_table 中查找某个账户的分区信息.
@@ -451,7 +493,7 @@ func (c *Client) GetSubAccountsAndUsers(ctx context.Context, account string) ([]
 	var subUsers []string
 	if err := c.DB.WithContext(ctx).
 		Table(table).
-		Where("parent_acct = ? AND deleted = 0 AND `user` <> ''", account).
+		Where("acct = ? AND deleted = 0 AND `user` <> ''", account).
 		Distinct().
 		Pluck("`user`", &subUsers).Error; err != nil {
 		return nil, nil, err

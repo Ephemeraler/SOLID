@@ -1,0 +1,21 @@
+# test log
+getenv PATH
+stat /usr/local/go/bin/sh
+stat /Library/Frameworks/Python.framework/Versions/3.7/bin/sh
+stat /Library/Frameworks/Python.framework/Versions/3.7/bin/sh
+stat /usr/local/bin/sh
+stat /System/Cryptexes/App/usr/bin/sh
+stat /usr/bin/sh
+stat /bin/sh
+open /dev/null
+open /bin/sh
+getenv PATH
+stat /usr/local/go/bin/sh
+stat /Library/Frameworks/Python.framework/Versions/3.7/bin/sh
+stat /Library/Frameworks/Python.framework/Versions/3.7/bin/sh
+stat /usr/local/bin/sh
+stat /System/Cryptexes/App/usr/bin/sh
+stat /usr/bin/sh
+stat /bin/sh
+open /dev/null
+open /bin/sh

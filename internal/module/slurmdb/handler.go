@@ -2,7 +2,6 @@ package slurmdb
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +13,96 @@ import (
 	"solid/internal/pkg/common/response"
 	"solid/internal/pkg/model"
 )
+
+// HandlerGetUserByName 获取指定用户名的信息。
+//
+// @Summary 获取用户信息
+// @Description 通过路径参数 name 查询 user_table 中 deleted=0 的用户信息
+// @Tags slurm-accounting, user
+// @Produce json
+// @Param name path string true "用户名"
+// @Success 200 {object} response.Response
+// @Failure 400 {object} response.Response
+// @Failure 500 {object} response.Response
+// @Router /api/v1/slurm/accountting/user/:name [get]
+func HandlerGetUserByName(c *gin.Context) {
+	client := slurmdbc.Default()
+	if client == nil {
+		c.JSON(http.StatusInternalServerError, response.Response{Detail: "slurmdb client not initialized"})
+		return
+	}
+	name := c.Param("name")
+	if strings.TrimSpace(name) == "" {
+		c.JSON(http.StatusBadRequest, response.Response{Detail: "missing user name"})
+		return
+	}
+	users, err := client.GetUserByName(c.Request.Context(), name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, response.Response{Detail: err.Error()})
+		return
+	}
+	if len(users) == 0 {
+		c.JSON(http.StatusBadRequest, response.Response{Detail: "user not found or deleted"})
+		return
+	}
+	c.JSON(http.StatusOK, response.Response{Results: users[0]})
+}
+
+// HandlerGetUserAll 获取用户列表（分页）。
+//
+// @Summary 获取用户列表
+// @Description 从 user_table 查询 deleted=0 的用户；当 paging=true 时按 page/page_size 分页返回，当 paging=false 时返回全部
+// @Tags slurm-accounting, user
+// @Produce json
+// @Param paging query bool false "是否开启分页" default(true)
+// @Param page query int false "页码，从 1 开始（仅当 paging=true 生效）" minimum(1) default(1)
+// @Param page_size query int false "每页数量，1-100（仅当 paging=true 生效）" minimum(1) maximum(100) default(20)
+// @Success 200 {object} response.Response
+// @Failure 400 {object} response.Response
+// @Failure 500 {object} response.Response
+// @Router /api/v1/slurm/accountting/user/all [get]
+func HandlerGetUserAll(c *gin.Context) {
+	client := slurmdbc.Default()
+	if client == nil {
+		c.JSON(http.StatusInternalServerError, response.Response{Detail: "slurmdb client not initialized"})
+		return
+	}
+
+	// Parse paging flag (default true)
+	var pagingFlag struct {
+		Paging *bool `form:"paging"`
+	}
+	_ = c.ShouldBindQuery(&pagingFlag)
+	paging := true
+	if pagingFlag.Paging != nil {
+		paging = *pagingFlag.Paging
+	}
+
+	if paging {
+		var pq model.PagingQuery
+		_ = c.ShouldBindQuery(&pq)
+		pq.SetDefaults(1, 20, 100)
+		if err := pq.Validate(); err != nil {
+			c.JSON(http.StatusBadRequest, response.Response{Detail: "invalid paging parameters"})
+			return
+		}
+		rows, total, err := client.GetUsersPaged(c.Request.Context(), true, pq.Page, pq.PageSize)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, response.Response{Detail: err.Error()})
+			return
+		}
+		prevURL, nextURL := response.BuildPageLinks(c.Request.URL, pq.Page, pq.PageSize, int(total))
+		c.JSON(http.StatusOK, response.Response{Count: int(total), Previous: prevURL, Next: nextURL, Results: rows})
+		return
+	}
+
+	rows, total, err := client.GetUsersPaged(c.Request.Context(), false, 0, 0)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, response.Response{Detail: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, response.Response{Count: int(total), Results: rows})
+}
 
 // HandlerGetQoS 获取指定的 QoS 信息。
 //
@@ -42,7 +131,6 @@ func HandlerGetQoS(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, response.Response{Detail: "invalid id parameter"})
 		return
 	}
-	fmt.Println(id)
 	row, err := client.GetQos(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -112,31 +200,131 @@ func HandlerGetQoSAll(c *gin.Context) {
 	c.JSON(http.StatusOK, response.Response{Count: int(total), Results: rows})
 }
 
-// HandlerGetAccountsTree 返回指定账户的子账户树信息。
+// HandlerGetAccountByName 获取指定账户信息。
 //
-// @Summary 获取子账户树
-// @Description 根据 account 查询子账户树, 获取其直接子用户节点与子账户节点
+// @Summary 获取账户信息
+// @Description 通过路径参数 name 获取 acct_table 中 deleted=0 的账户信息
 // @Tags slurm-accounting, account
 // @Produce json
-// @Param account query string true "账户名称"
+// @Param name path string true "账户名称"
 // @Success 200 {object} response.Response
 // @Failure 400 {object} response.Response
 // @Failure 500 {object} response.Response
-// @Router /api/v1/slurm/accounting/accounts/tree [get]
-func HandlerGetAccountsTree(c *gin.Context) {
+// @Router /api/v1/slurm/accounting/account/:name [get]
+func HandlerGetAccountByName(c *gin.Context) {
+	client := slurmdbc.Default()
+	if client == nil {
+		c.JSON(http.StatusInternalServerError, response.Response{Detail: "slurmdb client not initialized"})
+		return
+	}
+	name := c.Param("name")
+	if strings.TrimSpace(name) == "" {
+		c.JSON(http.StatusBadRequest, response.Response{Detail: "missing account name"})
+		return
+	}
+	acct, err := client.GetAcctByName(c.Request.Context(), name)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusBadRequest, response.Response{Detail: "account not found or deleted"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, response.Response{Detail: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, response.Response{Results: acct})
+}
+
+// HandlerGetAccountAll 获取账户列表（分页）。
+//
+// @Summary 获取账户列表
+// @Description 从 acct_table 查询 deleted=0 的账户；当 paging=true 时按 page/page_size 分页返回，当 paging=false 时返回全部
+// @Tags slurm-accounting, account
+// @Produce json
+// @Param paging query bool false "是否开启分页" default(true)
+// @Param page query int false "页码，从 1 开始（仅当 paging=true 生效）" minimum(1) default(1)
+// @Param page_size query int false "每页数量，1-100（仅当 paging=true 生效）" minimum(1) maximum(100) default(20)
+// @Success 200 {object} response.Response
+// @Failure 400 {object} response.Response
+// @Failure 500 {object} response.Response
+// @Router /api/v1/slurm/accounting/account/all [get]
+func HandlerGetAccountAll(c *gin.Context) {
 	client := slurmdbc.Default()
 	if client == nil {
 		c.JSON(http.StatusInternalServerError, response.Response{Detail: "slurmdb client not initialized"})
 		return
 	}
 
-	account := c.Query("account")
+	// Parse paging flag (default true)
+	var pagingFlag struct {
+		Paging *bool `form:"paging"`
+	}
+	_ = c.ShouldBindQuery(&pagingFlag)
+	paging := true
+	if pagingFlag.Paging != nil {
+		paging = *pagingFlag.Paging
+	}
+
+	if paging {
+		// Validate page/page_size
+		var pq model.PagingQuery
+		_ = c.ShouldBindQuery(&pq)
+		pq.SetDefaults(1, 20, 100)
+		if err := pq.Validate(); err != nil {
+			c.JSON(http.StatusBadRequest, response.Response{Detail: "invalid paging parameters"})
+			return
+		}
+
+		accts, total, err := client.GetAccounts(c.Request.Context(), paging, pq.Offset(), pq.Limit())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, response.Response{Detail: err.Error()})
+			return
+		}
+		prevURL, nextURL := response.BuildPageLinks(c.Request.URL, pq.Page, pq.PageSize, int(total))
+		totalInt := int(total)
+		c.JSON(http.StatusOK, response.Response{
+			Count:    totalInt,
+			Previous: prevURL,
+			Next:     nextURL,
+			Results:  accts,
+		})
+		return
+	}
+
+	// Not paged: return all accounts (deleted=0)
+	accts, total, err := client.GetAccounts(c.Request.Context(), false, 0, 0)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, response.Response{Detail: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response.Response{Count: int(total), Results: accts})
+}
+
+// HandlerChildNodesOfAccount 返回指定账户的子账户树信息。
+//
+// @Summary 获取子账户树
+// @Description 根据 account 查询子账户树, 获取其直接子用户节点与子账户节点
+// @Tags slurm-accounting, account
+// @Produce json
+// @Param name path string true "账户名称"
+// @Success 200 {object} response.Response
+// @Failure 400 {object} response.Response
+// @Failure 500 {object} response.Response
+// @Router /api/v1/slurm/accouting/account/:name/childnodes
+func HandlerChildNodesOfAccount(c *gin.Context) {
+	client := slurmdbc.Default()
+	if client == nil {
+		c.JSON(http.StatusInternalServerError, response.Response{Detail: "slurmdb client not initialized"})
+		return
+	}
+
+	account := c.Param("name")
 	if account == "" {
 		c.JSON(http.StatusBadRequest, response.Response{Detail: "missing account parameter"})
 		return
 	}
 
-	tree, err := client.GetAccountsTree(c.Request.Context(), account)
+	tree, err := client.GetChildNodesOfAccount(c.Request.Context(), account)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusBadRequest, response.Response{Detail: "account not found or deleted"})
@@ -148,47 +336,40 @@ func HandlerGetAccountsTree(c *gin.Context) {
 	c.JSON(http.StatusOK, response.Response{Results: tree})
 }
 
-type AssociationTree struct {
-	Acct     string            `json:"acct"`      // 账户名
-	SubAccts []AssociationTree `json:"sub_accts"` // 子账户信息
-	Users    []Association     `json:"users"`     // 关联的用户列表
-}
-
-type Association struct {
-	User       string   `json:"user"`       // 用户名
-	Partitions []string `json:"partitions"` // 用户所关联的分区
-}
-
-// HandlerGetAssociationTree 获取某个账户子节点的关联信息, 包括子账户列表、子用户列表以及子用户关联的分区列表
+// HandlerGetAssociationChildNodesOfAccount 获取某账户的关联子节点信息。
 //
-// @Summary 获取某账户子节点关联信息
-// @Description 获取某账户节点的关联子树.
+// @Summary 获取账户关联子节点
+// @Description 根据 account 获取默认分区、子账户列表以及子用户关联的分区列表
 // @Tags 用户管理
 // @Produce json
-// @Param account query string true "账户名称"
+// @Param account path string true "账户名称"
 // @Success 200 {object} response.Response
 // @Failure 400 {object} response.Response
 // @Failure 500 {object} response.Response
-// @Router /api/v1/slurm/accounting/associations/tree [get]
-func HandlerGetAssociationsTree(c *gin.Context) {
+// @Router /api/v1/slurm/accounting/association/:account/childnodes
+func HandlerGetAssociationChildNodesOfAccount(c *gin.Context) {
 	client := slurmdbc.Default()
 	if client == nil {
 		c.JSON(http.StatusInternalServerError, response.Response{Detail: "slurmdb client not initialized"})
 		return
 	}
 
-	acct := c.Query("account")
-	if acct == "" {
+	account := c.Param("account")
+	if strings.TrimSpace(account) == "" {
 		c.JSON(http.StatusBadRequest, response.Response{Detail: "missing account parameter"})
 		return
 	}
 
-	tree, err := client.GetAssociationTree(c.Request.Context(), acct)
+	node, err := client.GetAssociationChildNodesOfAccount(c.Request.Context(), account)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusBadRequest, response.Response{Detail: "account not found or deleted"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, response.Response{Detail: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, response.Response{Results: tree})
+	c.JSON(http.StatusOK, response.Response{Results: node})
 }
 
 type AssociationDetail struct {
@@ -257,131 +438,7 @@ func HandlerGetTreeAssociationsDetail(c *gin.Context) {
 		return
 	}
 
-	det := AssociationDetail{
-		IDAssoc:        row.IDAssoc,
-		ClusterName:    client.ClusterName,
-		Acct:           row.Acct,
-		Partition:      row.Partition,
-		Shares:         row.Shares,
-		MaxJobs:        row.MaxJobs,
-		MaxSubmitJobs:  row.MaxSubmitJobs,
-		MaxWallPJ:      row.MaxWallPJ,
-		GrpTres:        row.GrpTres,
-		GrpWall:        row.GrpWall,
-		GrpTresMins:    row.GrpTresMins,
-		GrpJobs:        row.GrpJobs,
-		GrpSubmitJobs:  row.GrpSubmitJobs,
-		Priority:       row.Priority,
-		MinPrioThresh:  row.MinPrioThresh,
-		MaxJobsAccrue:  row.MaxJobsAccrue,
-		GrpJobsAccrue:  row.GrpJobsAccrue,
-		MaxTresPJ:      row.MaxTresPJ,
-		MaxTresPN:      row.MaxTresPN,
-		MaxTresMinsPJ:  row.MaxTresMinsPJ,
-		MaxTresRunMins: row.MaxTresRunMins,
-		GrpTresRunMins: row.GrpTresRunMins,
-		DefQosID:       fmt.Sprintf("%d", row.DefQosID),
-		QoS:            row.QOS,
-	}
-	// if row.DefQosID == 0 {
-	// 	det.DefQosID = "No Default"
-	// } else {
-	// 	defQosName, err := client.GetQos(c.Request.Context(), int(row.DefQosID))
-	// 	if err != nil {
-	// 		c.JSON(http.StatusInternalServerError, response.Response{Results: det, Detail: "unable to find qos name by id"})
-	// 		return
-	// 	}
-	// 	fmt.Println(len(defQosName))
-	// 	det.DefQosID = defQosName[0].Name
-	// }
-
-	// qoslist := []string{}
-	// for _, idStr := range strings.Split(row.QOS, ",") {
-	// 	if idStr != "" {
-	// 		id, err := strconv.Atoi(idStr)
-	// 		if err != nil {
-	// 			c.JSON(http.StatusInternalServerError, response.Response{Results: det, Detail: "unable to parse qos list"})
-	// 			return
-	// 		}
-	// 		defQosName, err := client.GetQos(c.Request.Context(), id)
-	// 		if err != nil {
-	// 			c.JSON(http.StatusInternalServerError, response.Response{Results: det, Detail: "unable to find qos name by id"})
-	// 		}
-	// 		qoslist = append(qoslist, defQosName[0].Name)
-	// 	}
-	// }
-	// det.QoS = strings.Join(qoslist, ",")
-	c.JSON(http.StatusOK, response.Response{Results: det})
-}
-
-// HandlerGetAccounts 获取 Slurm 账户系统中的账户列表（分页）。
-//
-// 业务说明：
-//   - 仅返回未删除的账户（deleted = 0）。
-//   - 支持分页参数 page 与 page_size，默认 page=1、page_size=20，最大 page_size=100。
-//
-// @Summary 获取 Slurm 账户列表
-// @Description 获取 deleted=0 的账户；当 paging=true 时按 page/page_size 分页并校验，当 paging=false 时返回全部且忽略分页参数
-// @Tags slurm-accounting, account
-// @Produce json
-// @Param paging query bool false "是否开启分页" default(true)
-// @Param page query int false "页码，从 1 开始（仅当 paging=true 生效）" minimum(1) default(1)
-// @Param page_size query int false "每页数量，1-100（仅当 paging=true 生效）" minimum(1) maximum(100) default(20)
-// @Success 200 {object} response.Response
-// @Failure 400 {object} response.Response
-// @Failure 500 {object} response.Response
-// @Router /api/v1/slurm/accounting/accounts [get]
-func HandlerGetAccounts(c *gin.Context) {
-	client := slurmdbc.Default()
-	if client == nil {
-		c.JSON(http.StatusInternalServerError, response.Response{Detail: "slurmdb client not initialized"})
-		return
-	}
-
-	// Parse paging flag (default true)
-	var pagingFlag struct {
-		Paging *bool `form:"paging"`
-	}
-	_ = c.ShouldBindQuery(&pagingFlag)
-	paging := true
-	if pagingFlag.Paging != nil {
-		paging = *pagingFlag.Paging
-	}
-
-	if paging {
-		// Validate page/page_size
-		var pq model.PagingQuery
-		_ = c.ShouldBindQuery(&pq)
-		pq.SetDefaults(1, 20, 100)
-		if err := pq.Validate(); err != nil {
-			c.JSON(http.StatusBadRequest, response.Response{Detail: "invalid paging parameters"})
-			return
-		}
-
-		accts, total, err := client.GetAccounts(c.Request.Context(), paging, pq.Offset(), pq.Limit())
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, response.Response{Detail: err.Error()})
-			return
-		}
-		prevURL, nextURL := response.BuildPageLinks(c.Request.URL, pq.Page, pq.PageSize, int(total))
-		totalInt := int(total)
-		c.JSON(http.StatusOK, response.Response{
-			Count:    totalInt,
-			Previous: prevURL,
-			Next:     nextURL,
-			Results:  accts,
-		})
-		return
-	}
-
-	// Not paged: return all accounts (deleted=0)
-	accts, total, err := client.GetAccounts(c.Request.Context(), false, 0, 0)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, response.Response{Detail: err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, response.Response{Count: int(total), Results: accts})
+	c.JSON(http.StatusOK, response.Response{Results: row})
 }
 
 // HandlerGetAccountingJobs 获取作业列表（分页）。
@@ -471,8 +528,8 @@ func HandlerGetAccountingJobsSteps(c *gin.Context) {
 // @Success 200 {object} response.Response
 // @Failure 400 {object} response.Response
 // @Failure 500 {object} response.Response
-// @Router /api/v1/slurm/accounting/job/detail [get]
-func HandlerGetAccountingJobDetail(c *gin.Context) {
+// @Router /api/v1/slurm/accounting/job [get]
+func HandlerGetJobFromAccounting(c *gin.Context) {
 	client := slurmdbc.Default()
 	if client == nil {
 		c.JSON(http.StatusInternalServerError, response.Response{Detail: "slurmdb client not initialized"})

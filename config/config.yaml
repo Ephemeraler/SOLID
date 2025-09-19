@@ -28,7 +28,7 @@ server:
 
     bindDN: "cn=admin,dc=dc-test,dc=cn"
     bindPassword: "adminpassword"
-    baseDN: "dc=dc-test,dc=cn"
+    baseDN: "dc=dc-test,dc=cn" # 
 
     connectTimeout: "5s"
     readTimeout: "10s"

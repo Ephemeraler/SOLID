@@ -8,9 +8,11 @@ type Registrar interface{ Register(r *gin.Engine) }
 // 全局注册表（集中声明要装配的模块）
 var registrars []Registrar
 
+// Register 向全局注册表中注册模块
 func Register(rs ...Registrar) { registrars = append(registrars, rs...) }
 
-func MountAll(r *gin.Engine) {
+// Mount 挂载所有模块
+func Mount(r *gin.Engine) {
 	for _, rg := range registrars {
 		rg.Register(r)
 	}

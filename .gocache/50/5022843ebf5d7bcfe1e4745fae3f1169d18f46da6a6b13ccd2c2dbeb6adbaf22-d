@@ -1,0 +1,2 @@
+./slurmctl.go
+./slurmctl_test.go

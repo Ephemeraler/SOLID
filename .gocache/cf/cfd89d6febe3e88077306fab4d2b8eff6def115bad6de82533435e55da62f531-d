@@ -1,0 +1,4 @@
+=== RUN   TestParseParttion_MultiplePartitions
+--- PASS: TestParseParttion_MultiplePartitions (0.00s)
+PASS
+ok  	solid/internal/pkg/client/slurmctl	0.407s

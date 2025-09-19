@@ -7,9 +7,9 @@ import (
 )
 
 type Response struct {
-	Count    *int        `json:"count"`
-	Previous *url.URL    `json:"previous" swaggertype:"string"`
-	Next     *url.URL    `json:"next" swaggertype:"string"`
+	Count    int         `json:"count"`
+	Previous url.URL     `json:"previous" swaggertype:"string"`
+	Next     url.URL     `json:"next" swaggertype:"string"`
 	Results  interface{} `json:"results"`
 	Detail   string      `json:"detail"`
 }
@@ -17,25 +17,17 @@ type Response struct {
 // MarshalJSON renders Previous and Next as URL strings instead of struct fields.
 func (r Response) MarshalJSON() ([]byte, error) {
 	type alias struct {
-		Count    *int        `json:"count"`
-		Previous *string     `json:"previous"`
-		Next     *string     `json:"next"`
+		Count    int         `json:"count"`
+		Previous string      `json:"previous"`
+		Next     string      `json:"next"`
 		Results  interface{} `json:"results"`
 		Detail   string      `json:"detail"`
 	}
-	var prevStr, nextStr *string
-	if r.Previous != nil {
-		s := r.Previous.String()
-		prevStr = &s
-	}
-	if r.Next != nil {
-		s := r.Next.String()
-		nextStr = &s
-	}
+
 	a := alias{
 		Count:    r.Count,
-		Previous: prevStr,
-		Next:     nextStr,
+		Previous: r.Previous.String(),
+		Next:     r.Next.String(),
 		Results:  r.Results,
 		Detail:   r.Detail,
 	}
@@ -44,13 +36,13 @@ func (r Response) MarshalJSON() ([]byte, error) {
 
 // BuildPageLinks constructs previous and next page URLs based on the provided
 // base URL and paging parameters. It does not modify the input URL.
-func BuildPageLinks(base *url.URL, page, pageSize, total int) (prev, next *url.URL) {
+func BuildPageLinks(base *url.URL, page, pageSize, total int) (prev, next url.URL) {
 	if base == nil || pageSize <= 0 {
-		return nil, nil
+		return url.URL{}, url.URL{}
 	}
 	lastPage := (total + pageSize - 1) / pageSize
 
-	makeURL := func(p int) *url.URL {
+	makeURL := func(p int) url.URL {
 		if p < 1 {
 			p = 1
 		}
@@ -59,7 +51,7 @@ func BuildPageLinks(base *url.URL, page, pageSize, total int) (prev, next *url.U
 		q.Set("page", strconv.Itoa(p))
 		q.Set("page_size", strconv.Itoa(pageSize))
 		u.RawQuery = q.Encode()
-		return &u
+		return u
 	}
 
 	if page > 1 {
